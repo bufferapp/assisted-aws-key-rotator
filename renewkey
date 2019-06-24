@@ -1,0 +1,160 @@
+#!/bin/bash
+
+deleteAnActiveKey() {
+  echo -n '
+Do you wish to delete one of the keys (y/n)? '
+  read deleteKeyAnswer
+  if [[ "$deleteKeyAnswer" == "y" || "$deleteKeyAnswer" == "Y" ]]
+  then
+    echo "Access Key Id 1: ${activeKeys[0]}"
+    echo "Access Key Id 2: ${activeKeys[1]}"
+    echo -n '
+Enter the ACCESS KEY ID you wish to delete: '
+    read deleteKeyId
+    echo $deleteKeyId
+    if [[ "$deleteKeyId" == "${activeKeys[0]}" || "$deleteKeyId" == "${activeKeys[1]}" ]]
+    then
+      echo -n '
+Deleting `'$deleteKeyId'`! Are you sure? (y/n) '
+      read deleteConfirm
+      if [[ "$deleteConfirm" == "y" || "$deleteConfirm" == "Y" ]]
+      then
+        aws iam delete-access-key --access-key-id $deleteKeyId
+        echo 'Key deleted'
+      else
+        echo '
+Please disable/delete one of the active keys before renewing this key. Thanks!'
+        exit
+      fi
+    else
+      echo '
+The Key ID entered does not match any of the key IDs in the account.
+Please enter it again if you wish to delete a key'
+      deleteAnActiveKey
+    fi
+  else
+    echo '
+Please disable/delete one of the active keys before renewing this key. Thanks!'
+    exit
+  fi
+}
+
+testNewAccessKey () {
+  testRun=$(aws iam list-access-keys 2>&1)
+  errorCheck=$(echo $testRun | grep 'An error')
+  if [[ "$errorCheck" == '' ]]
+  then
+    echo -n 'New key works. Proceed with deleting old key? (y/n) '
+    read deleteOldKeyAnswer
+    if [[ "$deleteOldKeyAnswer" == "y" || "$deleteOldKeyAnswer" == "Y" ]]
+    then
+      echo "Deleting key: \`$currentKey\`"
+      aws iam delete-access-key --access-key-id $currentKey
+      echo 'Key deleted. Rotation complete! Thanks for staying secure :)'
+    else
+      echo -n 'Do you wish to disable the old key instead? (y/n) '
+      read disableKeyInsteadAnswer
+      if [[ "$disableKeyInsteadAnswer" == "y" || "$disableKeyInsteadAnswer" == "Y" ]]
+      then
+        echo "Disabling key: \`$currentKey\`"
+        aws iam update-access-key --access-key-id $currentKey --status Inactive
+        echo 'Key disabled. Run renewkey again later to delete the old key if you want'
+      fi
+    fi
+  else
+    echo 'New key does not work! Please verify what has gone wrong.
+Backup of old key is in ~/.aws/'$currentKey'.backup'
+  fi
+}
+
+createAndStoreNewAccessKey () {
+  # create backup of current key
+  currentKey=$(aws iam list-access-keys --output text --query 'AccessKeyMetadata[0].[AccessKeyId]')
+  echo "Backing up key to ~/.aws/$currentKey.backup and creating new key"
+  cp ~/.aws/credentials ~/.aws/$currentKey.backup
+  IFS=$OLDIFS
+  newCredentials=($(aws iam create-access-key --output text --query 'AccessKey.[AccessKeyId, SecretAccessKey]'))
+
+  cat << EOF > ~/.aws/credentials
+[default]
+aws_access_key_id = ${newCredentials[0]}
+aws_secret_access_key = ${newCredentials[1]}
+EOF
+  echo 'New Access key created. Sleeping for 10 seconds to let it activate'
+  sleep 10
+  echo 'Sleep complete. Testing key and completing rotation'
+  testNewAccessKey
+}
+
+renewAwsKey () {
+
+  # check for existing keys and count how many there are
+  numberOfKeys=$(aws iam list-access-keys --output text --query 'AccessKeyMetadata[*].[AccessKeyId]' | wc -l)
+
+  if ((numberOfKeys > 1))
+  then
+    echo "More than one key already present. Checking status"
+    # if there are is more than one key, check how many are active
+    activeKeys=($(aws iam list-access-keys --output text --query 'AccessKeyMetadata[?Status==`Active`].[AccessKeyId]'))
+    numberOfActiveKeys=$(echo "${activeKeys[*]}" | wc -l)
+    if ((numberOfActiveKeys > 1))
+    then
+      echo 'Both keys are active. At least one needs to be removed to proceed.
+Following are the key details'
+      aws iam list-access-keys --output table --query 'AccessKeyMetadata'
+      deleteAnActiveKey
+      echo -n 'Proceed with creating new key? (y/n) '
+      read proceedCreatingKeyAnswer
+      if [[ "$proceedCreatingKeyAnswer" == "y" || "$proceedCreatingKeyAnswer" == "Y" ]]
+      then
+        createAndStoreNewAccessKey
+      else
+        echo 'All work complete for now then. Exiting. Byee!'
+        exit
+      fi
+    elif ((numberOfActiveKeys == 1))
+    then
+      echo 'One key is inactive. Here are its details:'
+      aws iam list-access-keys --output json --query 'AccessKeyMetadata[?Status==`Inactive`]'
+      echo -n 'Do you wish to delete this key? (y/n) '
+      read deleteDisabledKeyAnswer
+      if [[ "$deleteDisabledKeyAnswer" == "y" || "$deleteDisabledKeyAnswer" == "Y" ]]
+      then
+        echo 'Proceeding to delete the key'
+        disabledKeyAccessKeyId=$(aws iam list-access-keys --output text --query 'AccessKeyMetadata[?Status==`Inactive`].[AccessKeyId]')
+        aws iam delete-access-key --access-key-id $disabledKeyAccessKeyId
+        echo "Deleted key: \`$disabledKeyAccessKeyId\`"
+        echo -n '
+Do you wish to proceed with rotating keys? (y/n) '
+        read proceedCreatingKeyAnswer
+        if [[ "$proceedCreatingKeyAnswer" == "y" || "$proceedCreatingKeyAnswer" == "Y" ]]
+        then
+          createAndStoreNewAccessKey
+        else
+          echo 'All work complete for now then. Exiting. Byee!'
+          exit
+        fi
+      else
+        echo "You'll need to delete the disabled key before proceeding to rotate keys.
+Exiting for now. Byee :)."
+      fi
+    fi
+  # if the number is not equal to 2 check which one is disabled.
+  # Else, warn user and exit
+  else
+    echo 'Only 1 key present. Proceeding with rotation of current key'
+    createAndStoreNewAccessKey
+  fi
+
+
+
+  # prompt user to delete the disabled key
+
+  # if user chooses to delete, delete the key, and proceed with the rest of the logic.
+
+}
+
+OLDIFS=$IFS
+IFS=$'
+'
+renewAwsKey
