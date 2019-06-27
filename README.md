@@ -1,4 +1,4 @@
-# Assisted AWS Key Rotater
+# Assisted AWS Key Rotator
 
 Going to the AWS console and rotating your key can be a process that's easy to forget. Both how to and just to do.
 
